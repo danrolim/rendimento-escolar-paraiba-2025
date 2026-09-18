@@ -309,11 +309,9 @@ with tab_ml:
     st.header("Classificação de risco de abandono")
     st.markdown(
         "Este modelo aprende, a partir dos dados reais dos 223 municípios da Paraíba, se o "
-        "**perfil escolar** — a localização (urbana ou rural) e a rede administrativa "
-        "(federal, estadual, municipal ou privada) — já indica um risco maior ou menor de "
-        "abandono. As taxas de aprovação e reprovação **não** são usadas como pista aqui: "
-        "como aprovação, reprovação e abandono somam sempre ~100%, usá-las para prever o "
-        "abandono seria quase 'entregar a resposta' em vez de descobrir um padrão real."
+        "perfil escolar, ou seja, a localização (urbana ou rural) e a rede administrativa "
+        "(federal, estadual, municipal ou privada), já indica um risco maior ou menor de "
+        "abandono escolar."
     )
 
     clf_etapa = st.radio("Etapa para classificação", list(ETAPA_DETALHE.keys()), key="clf_etapa")
