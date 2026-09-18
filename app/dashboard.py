@@ -4,6 +4,7 @@ Fonte dos dados: INEP - Taxas de Rendimento Escolar por Municipio.
 """
 
 import json
+import unicodedata
 from pathlib import Path
 
 import pandas as pd
@@ -90,6 +91,27 @@ def rate_column(taxa: str, etapa: str, detalhe: str) -> str:
     return f"{taxa}_{ETAPA_DETALHE[etapa][detalhe]}"
 
 
+def chave_alfabetica(texto: str) -> str:
+    """Chave de ordenação que ignora acentos (ordem alfabética correta em português)."""
+    return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii").lower()
+
+
+def destaque_municipio(dados: pd.DataFrame, coluna: str, modo: str) -> str:
+    """Formata o município de destaque (maior/menor taxa), indicando empates."""
+    validos = dados.dropna(subset=[coluna])
+    if validos.empty:
+        return "-"
+    valor = validos[coluna].max() if modo == "max" else validos[coluna].min()
+    empatados = sorted(validos.loc[validos[coluna] == valor, "municipio"], key=chave_alfabetica)
+    texto = empatados[0]
+    restantes = len(empatados) - 1
+    if restantes == 1:
+        texto += " e outro município"
+    elif restantes > 1:
+        texto += f" e outros {restantes} municípios"
+    return f"{texto} ({valor:.1f}%)"
+
+
 st.set_page_config(page_title="Rendimento Escolar - PB (2025)", layout="wide")
 st.title("Taxas de Rendimento Escolar — Municípios da Paraíba (2025)")
 st.caption("Fonte: INEP — Taxas de Rendimento Escolar por Município, 2025.")
@@ -124,11 +146,17 @@ if filtered.empty:
 # ------------------------------------------------------------------ KPIs --
 map_df = filtered.groupby(["codigo_municipio", "municipio"], as_index=False)[col].mean()
 
-k1, k2, k3, k4 = st.columns(4)
+k1, k4 = st.columns(2)
 k1.metric(f"Média estadual — {RATE_LABELS[taxa]}", f"{map_df[col].mean():.1f}%")
-k2.metric("Município com maior taxa", map_df.loc[map_df[col].idxmax(), "municipio"] if map_df[col].notna().any() else "-")
-k3.metric("Município com menor taxa", map_df.loc[map_df[col].idxmin(), "municipio"] if map_df[col].notna().any() else "-")
 k4.metric("Municípios no filtro", f"{map_df['codigo_municipio'].nunique()}")
+
+k2, k3 = st.columns(2)
+with k2:
+    st.markdown("**Município com maior taxa**")
+    st.markdown(destaque_municipio(map_df, col, "max"))
+with k3:
+    st.markdown("**Município com menor taxa**")
+    st.markdown(destaque_municipio(map_df, col, "min"))
 
 st.divider()
 
@@ -158,7 +186,7 @@ with tab_comparativos:
     c1, c2 = st.columns(2)
 
     with c1:
-        st.subheader(f"Top 15 municípios — {RATE_LABELS[taxa]}")
+        st.subheader(f"15 municípios com maior - {RATE_LABELS[taxa]}")
         top = map_df.nlargest(15, col)
         st.plotly_chart(
             px.bar(top, x=col, y="municipio", orientation="h", labels={col: f"{RATE_LABELS[taxa]} (%)"})
@@ -167,7 +195,7 @@ with tab_comparativos:
         )
 
     with c2:
-        st.subheader(f"Bottom 15 municípios — {RATE_LABELS[taxa]}")
+        st.subheader(f"15 municípios com menor - {RATE_LABELS[taxa]}")
         bottom = map_df.nsmallest(15, col)
         st.plotly_chart(
             px.bar(bottom, x=col, y="municipio", orientation="h", labels={col: f"{RATE_LABELS[taxa]} (%)"})
@@ -353,7 +381,6 @@ with tab_ml:
                 ),
                 use_container_width=True,
             )
-            st.markdown("**Em português:**")
             for i, lbl in enumerate(labels):
                 total = cm[i].sum()
                 if total == 0:
