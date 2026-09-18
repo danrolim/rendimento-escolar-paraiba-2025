@@ -6,7 +6,6 @@ Fonte dos dados: INEP - Taxas de Rendimento Escolar por Municipio.
 import json
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -308,20 +307,21 @@ with tab_ml:
     st.divider()
 
     st.header("Classificação de risco de abandono")
-    st.caption(
-        "Random Forest prevê o nível de risco de abandono (Baixo/Médio/Alto) de uma "
-        "combinação Localização × Dependência a partir dessas variáveis e das taxas de "
-        "aprovação/reprovação."
+    st.markdown(
+        "Este modelo aprende, a partir dos dados reais dos 223 municípios da Paraíba, se o "
+        "**perfil escolar** — a localização (urbana ou rural) e a rede administrativa "
+        "(federal, estadual, municipal ou privada) — já indica um risco maior ou menor de "
+        "abandono. As taxas de aprovação e reprovação **não** são usadas como pista aqui: "
+        "como aprovação, reprovação e abandono somam sempre ~100%, usá-las para prever o "
+        "abandono seria quase 'entregar a resposta' em vez de descobrir um padrão real."
     )
 
     clf_etapa = st.radio("Etapa para classificação", list(ETAPA_DETALHE.keys()), key="clf_etapa")
     target_col = rate_column("abandono", clf_etapa, "Total")
-    aprov_col = rate_column("aprovacao", clf_etapa, "Total")
-    reprov_col = rate_column("reprovacao", clf_etapa, "Total")
 
     clf_df = df[
         df["localizacao"].isin(["Urbana", "Rural"]) & df["dependencia"].isin(["Federal", "Estadual", "Municipal", "Privada"])
-    ].dropna(subset=[target_col, aprov_col, reprov_col]).copy()
+    ].dropna(subset=[target_col]).copy()
 
     risco_codes, risco_bins = pd.qcut(clf_df[target_col], q=3, retbins=True, duplicates="drop", labels=False)
     all_labels = ["Baixo", "Médio", "Alto"]
@@ -329,9 +329,7 @@ with tab_ml:
     clf_df["risco"] = pd.Categorical.from_codes(risco_codes, categories=labels_disponiveis)
 
     encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
-    cat_features = encoder.fit_transform(clf_df[["localizacao", "dependencia"]])
-    num_features = clf_df[[aprov_col, reprov_col]].to_numpy()
-    X_clf = np.hstack([cat_features, num_features])
+    X_clf = encoder.fit_transform(clf_df[["localizacao", "dependencia"]])
     y_clf = clf_df["risco"]
 
     if y_clf.nunique() < 2 or len(clf_df) < 20:
@@ -357,11 +355,23 @@ with tab_ml:
                 ),
                 use_container_width=True,
             )
+            st.markdown("**Em português:**")
+            for i, lbl in enumerate(labels):
+                total = cm[i].sum()
+                if total == 0:
+                    continue
+                acertos = cm[i, i]
+                st.markdown(
+                    f"- Das **{total}** escolas que realmente tiveram risco **{lbl}**, "
+                    f"o modelo acertou **{acertos}** ({acertos / total:.0%})."
+                )
         with mc2:
-            feature_names = list(encoder.get_feature_names_out(["localizacao", "dependencia"])) + [aprov_col, reprov_col]
-            feature_names = [pretty_feature_name(n) for n in feature_names]
-            importances = pd.Series(rf.feature_importances_, index=feature_names).sort_values()
+            feature_names = [pretty_feature_name(n) for n in encoder.get_feature_names_out(["localizacao", "dependencia"])]
+            importancias_pct = pd.Series(rf.feature_importances_ * 100, index=feature_names).sort_values()
             st.plotly_chart(
-                px.bar(importances, orientation="h", title="Importância das variáveis", labels={"value": "Importância", "index": ""}),
+                px.bar(
+                    importancias_pct, orientation="h", title="Peso de cada variável na decisão do modelo",
+                    labels={"value": "Peso na decisão do modelo (%)", "index": ""},
+                ),
                 use_container_width=True,
             )
