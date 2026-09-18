@@ -36,6 +36,45 @@ ETAPA_DETALHE = {
     },
 }
 
+SUFFIX_PRETTY = {
+    "fund_total": "Fundamental Total",
+    "fund_anos_iniciais": "Fundamental Anos Iniciais",
+    "fund_anos_finais": "Fundamental Anos Finais",
+    "fund_1_ano": "Fundamental 1º Ano",
+    "fund_2_ano": "Fundamental 2º Ano",
+    "fund_3_ano": "Fundamental 3º Ano",
+    "fund_4_ano": "Fundamental 4º Ano",
+    "fund_5_ano": "Fundamental 5º Ano",
+    "fund_6_ano": "Fundamental 6º Ano",
+    "fund_7_ano": "Fundamental 7º Ano",
+    "fund_8_ano": "Fundamental 8º Ano",
+    "fund_9_ano": "Fundamental 9º Ano",
+    "medio_total": "Médio Total",
+    "medio_1_serie": "Médio 1ª Série",
+    "medio_2_serie": "Médio 2ª Série",
+    "medio_3_serie": "Médio 3ª Série",
+    "medio_4_serie": "Médio 4ª Série",
+    "medio_nao_seriado": "Médio Não Seriado",
+}
+
+CATEGORY_PRETTY = {"localizacao": "Localização", "dependencia": "Dependência"}
+
+
+def pretty_label(col: str) -> str:
+    """Converte um nome de coluna de taxa (ex.: aprovacao_fund_total) em rótulo legível."""
+    prefix, _, suffix = col.partition("_")
+    if prefix in RATE_LABELS and suffix in SUFFIX_PRETTY:
+        return f"{RATE_LABELS[prefix]} {SUFFIX_PRETTY[suffix]}"
+    return col
+
+
+def pretty_feature_name(name: str) -> str:
+    """Converte nomes de features one-hot (ex.: localizacao_Rural) em rótulos legíveis."""
+    for code, label in CATEGORY_PRETTY.items():
+        if name.startswith(f"{code}_"):
+            return f"{label}: {name[len(code) + 1:]}"
+    return pretty_label(name)
+
 
 @st.cache_data
 def load_data() -> pd.DataFrame:
@@ -155,14 +194,20 @@ with tab_comparativos:
 
 # ----------------------------------------------------------------- Tabela --
 with tab_tabela:
-    st.dataframe(
-        filtered[["municipio", "localizacao", "dependencia", col]].sort_values(col, ascending=False),
-        use_container_width=True,
-        height=600,
+    tabela_df = (
+        filtered[["municipio", "localizacao", "dependencia", col]]
+        .sort_values(col, ascending=False)
+        .rename(columns={
+            "municipio": "Município",
+            "localizacao": "Localização",
+            "dependencia": "Dependência Administrativa",
+            col: pretty_label(col),
+        })
     )
+    st.dataframe(tabela_df, use_container_width=True, height=600)
     st.download_button(
         "Baixar CSV filtrado",
-        filtered.to_csv(index=False).encode("utf-8"),
+        tabela_df.to_csv(index=False).encode("utf-8"),
         file_name="tx_rend_pb_filtrado.csv",
         mime="text/csv",
     )
@@ -211,8 +256,54 @@ with tab_ml:
         fig_cluster.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=400)
         st.plotly_chart(fig_cluster, use_container_width=True)
 
+    st.subheader("O que cada cluster significa")
+
+    media_estadual = cluster_base[feature_cols].mean()
+    perfil = cluster_base.groupby("cluster")[feature_cols].mean()
+
+    # Quanto cada cluster desvia da média estadual (positivo = melhor que a média,
+    # já ajustado para que aprovação alta e reprovação/abandono baixos sejam "positivos").
+    sinal = {c: (1 if c.startswith("aprovacao") else -1) for c in feature_cols}
+    desvio = perfil.apply(lambda row: sum((row[c] - media_estadual[c]) * sinal[c] for c in feature_cols), axis=1)
+    ranking = desvio.rank(ascending=False, method="first")
+
+    def classificar(posicao: float, total: int) -> tuple[str, str]:
+        fracao = (total - posicao) / (total - 1) if total > 1 else 1
+        if fracao >= 2 / 3:
+            return "🟢", "Bom desempenho geral"
+        if fracao <= 1 / 3:
+            return "🔴", "Necessita mais atenção"
+        return "🟡", "Desempenho intermediário"
+
+    def maior_desvio(cluster_id: str) -> str:
+        deltas = {c: perfil.loc[cluster_id, c] - media_estadual[c] for c in feature_cols}
+        destaque_col = max(deltas, key=lambda c: abs(deltas[c]))
+        delta = deltas[destaque_col]
+        if abs(delta) < 0.1:
+            return "praticamente igual à média estadual em todos os indicadores"
+        direcao = "acima" if delta > 0 else "abaixo"
+        return f"{pretty_label(destaque_col)} {abs(delta):.1f} p.p. {direcao} da média estadual"
+
+    situacao, explicacao = {}, {}
+    for cluster_id in perfil.index:
+        icone, rotulo = classificar(ranking[cluster_id], len(perfil))
+        situacao[cluster_id] = f"{icone} {rotulo}"
+        explicacao[cluster_id] = maior_desvio(cluster_id)
+
+    st.caption(
+        "Cada cluster é comparado com a média estadual dos indicadores usados na "
+        "clusterização. 🟢 = desempenho acima da média estadual; 🟡 = próximo da média; "
+        "🔴 = pontos de atenção abaixo da média estadual."
+    )
+    for cluster_id in perfil.index:
+        st.markdown(f"- **Cluster {cluster_id} — {situacao[cluster_id]}**: {explicacao[cluster_id]}.")
+
     st.subheader("Perfil médio de cada cluster")
-    st.dataframe(cluster_base.groupby("cluster")[feature_cols].mean().round(1), use_container_width=True)
+    tabela_perfil = perfil.copy()
+    tabela_perfil.insert(0, "Situação", pd.Series(situacao))
+    tabela_perfil.loc["Média estadual"] = pd.concat([pd.Series({"Situação": "⚪ Referência estadual"}), media_estadual])
+    tabela_perfil = tabela_perfil.rename(columns={c: pretty_label(c) for c in feature_cols})
+    st.dataframe(tabela_perfil.round(1), use_container_width=True)
 
     st.divider()
 
@@ -268,6 +359,7 @@ with tab_ml:
             )
         with mc2:
             feature_names = list(encoder.get_feature_names_out(["localizacao", "dependencia"])) + [aprov_col, reprov_col]
+            feature_names = [pretty_feature_name(n) for n in feature_names]
             importances = pd.Series(rf.feature_importances_, index=feature_names).sort_values()
             st.plotly_chart(
                 px.bar(importances, orientation="h", title="Importância das variáveis", labels={"value": "Importância", "index": ""}),
