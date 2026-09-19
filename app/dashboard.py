@@ -4,12 +4,14 @@ Fonte dos dados: INEP - Taxas de Rendimento Escolar por Municipio.
 """
 
 import json
+import time
 import unicodedata
 from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from sugestoes import MAX_CARACTERES, MAX_PALAVRAS, MAX_TITULO, contar_palavras, enviar, montar_dados
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
@@ -425,3 +427,46 @@ with tab_ml:
                 ),
                 use_container_width=True,
             )
+
+# -------------------------------------------------------------- Sugestões --
+INTERVALO_ENVIO_S = 60
+
+st.divider()
+st.header("Envie sua sugestão")
+
+# O endereço do formulário fica em st.secrets (o repositório é público).
+try:
+    cfg_form = dict(st.secrets["sugestoes"])
+    envio_configurado = all(k in cfg_form for k in ("url", "campo_titulo", "campo_sugestao"))
+except (KeyError, FileNotFoundError):
+    cfg_form, envio_configurado = {}, False
+
+if not envio_configurado:
+    st.info("O envio de sugestões ainda não está disponível neste painel.")
+else:
+    st.caption(
+        "Conte o que pode melhorar neste painel. A sugestão é recebida pelo autor do projeto e não é "
+        "publicada. Não informe dados pessoais."
+    )
+    with st.form("form_sugestao"):
+        titulo = st.text_input("Título (curto)", max_chars=MAX_TITULO)
+        sugestao = st.text_area(f"Sua sugestão (até {MAX_PALAVRAS} palavras)", height=200, max_chars=MAX_CARACTERES)
+        enviado = st.form_submit_button("Enviar sugestão")
+
+    if enviado:
+        espera = INTERVALO_ENVIO_S - (time.time() - st.session_state.get("ultimo_envio", 0))
+        if not titulo.strip() or not sugestao.strip():
+            st.warning("Preencha o título e a sugestão.")
+        elif contar_palavras(sugestao) > MAX_PALAVRAS:
+            st.warning(f"A sugestão tem {contar_palavras(sugestao)} palavras. O limite é {MAX_PALAVRAS}.")
+        elif espera > 0:
+            st.warning(f"Aguarde {int(espera) + 1} segundos para enviar outra sugestão.")
+        else:
+            try:
+                dados = montar_dados(titulo, sugestao, cfg_form["campo_titulo"], cfg_form["campo_sugestao"])
+                enviar(cfg_form["url"], dados)
+            except OSError:
+                st.error("Não foi possível enviar a sugestão agora. Tente novamente mais tarde.")
+            else:
+                st.session_state["ultimo_envio"] = time.time()
+                st.success("Obrigado! Sua sugestão foi enviada.")

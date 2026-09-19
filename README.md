@@ -39,6 +39,14 @@ streamlit run app/dashboard.py
   - **Classificação (Random Forest)** — prevê o nível de risco de abandono a partir da
     localização, dependência administrativa e taxas de aprovação/reprovação.
 
+## Envio de sugestões
+
+O final do painel tem um formulário (título curto e sugestão de até 500 palavras) cujas respostas
+são gravadas em um Google Forms do autor, que avisa por e-mail a cada nova resposta. O código não
+usa senha nem endereço de e-mail: só o endereço do formulário, lido de `st.secrets` (veja
+`.streamlit/secrets.toml.example`). Sem essa configuração, o painel funciona normalmente e mostra
+apenas um aviso no lugar do formulário.
+
 ## Deploy
 
 Aplicação publicada no [Streamlit Community Cloud](https://streamlit.io/cloud), a partir
