@@ -414,7 +414,7 @@ with tab_ml:
                     continue
                 acertos = cm[i, i]
                 st.markdown(
-                    f"- Das **{total}** escolas que realmente tiveram risco **{lbl}**, "
+                    f"- Dos **{total}** perfis escolares que realmente tiveram risco **{lbl}**, "
                     f"o modelo acertou **{acertos}** ({acertos / total:.0%})."
                 )
         with mc2:
