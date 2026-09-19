@@ -91,6 +91,61 @@ def rate_column(taxa: str, etapa: str, detalhe: str) -> str:
     return f"{taxa}_{ETAPA_DETALHE[etapa][detalhe]}"
 
 
+FEATURE_COLS = [
+    "aprovacao_fund_total", "reprovacao_fund_total", "abandono_fund_total",
+    "aprovacao_medio_total", "reprovacao_medio_total", "abandono_medio_total",
+]
+
+
+@st.cache_data
+def run_clustering(k: int) -> pd.DataFrame:
+    dados = load_data()
+    base = dados[(dados["localizacao"] == "Total") & (dados["dependencia"] == "Total")]
+    base = base.dropna(subset=FEATURE_COLS).copy()
+
+    X = StandardScaler().fit_transform(base[FEATURE_COLS])
+    base["cluster"] = KMeans(n_clusters=k, random_state=42, n_init=10).fit(X).labels_.astype(str)
+
+    coords = PCA(n_components=2, random_state=42).fit_transform(X)
+    base["pca_1"], base["pca_2"] = coords[:, 0], coords[:, 1]
+    return base
+
+
+@st.cache_data
+def train_classifier(target_col: str) -> dict | None:
+    dados = load_data()
+    clf_df = dados[
+        dados["localizacao"].isin(["Urbana", "Rural"])
+        & dados["dependencia"].isin(["Federal", "Estadual", "Municipal", "Privada"])
+    ].dropna(subset=[target_col]).copy()
+
+    risco_codes, risco_bins = pd.qcut(clf_df[target_col], q=3, retbins=True, duplicates="drop", labels=False)
+    labels_disponiveis = ["Baixo", "Médio", "Alto"][-(len(risco_bins) - 1):]
+    clf_df["risco"] = pd.Categorical.from_codes(risco_codes, categories=labels_disponiveis)
+
+    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
+    X_clf = encoder.fit_transform(clf_df[["localizacao", "dependencia"]])
+    y_clf = clf_df["risco"]
+
+    if y_clf.nunique() < 2 or len(clf_df) < 20:
+        return None
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_clf, y_clf, test_size=0.25, random_state=42, stratify=y_clf
+    )
+    rf = RandomForestClassifier(n_estimators=300, random_state=42).fit(X_train, y_train)
+    y_pred = rf.predict(X_test)
+
+    labels = sorted(y_clf.unique())
+    feature_names = [pretty_feature_name(n) for n in encoder.get_feature_names_out(["localizacao", "dependencia"])]
+    return {
+        "acc": accuracy_score(y_test, y_pred),
+        "labels": labels,
+        "cm": confusion_matrix(y_test, y_pred, labels=labels),
+        "importancias_pct": pd.Series(rf.feature_importances_ * 100, index=feature_names).sort_values(),
+    }
+
+
 def chave_alfabetica(texto: str) -> str:
     """Chave de ordenação que ignora acentos (ordem alfabética correta em português)."""
     return unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii").lower()
@@ -247,21 +302,9 @@ with tab_ml:
         "(Fundamental e Médio, totais por município)."
     )
 
-    cluster_base = df[(df["localizacao"] == "Total") & (df["dependencia"] == "Total")].copy()
-    feature_cols = [
-        "aprovacao_fund_total", "reprovacao_fund_total", "abandono_fund_total",
-        "aprovacao_medio_total", "reprovacao_medio_total", "abandono_medio_total",
-    ]
-    cluster_base = cluster_base.dropna(subset=feature_cols)
-
     k = st.slider("Número de clusters (k)", min_value=2, max_value=6, value=3)
-
-    X = StandardScaler().fit_transform(cluster_base[feature_cols])
-    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10).fit(X)
-    cluster_base["cluster"] = kmeans.labels_.astype(str)
-
-    coords = PCA(n_components=2, random_state=42).fit_transform(X)
-    cluster_base["pca_1"], cluster_base["pca_2"] = coords[:, 0], coords[:, 1]
+    cluster_base = run_clustering(k)
+    feature_cols = FEATURE_COLS
 
     cc1, cc2 = st.columns([1, 1])
     with cc1:
@@ -345,34 +388,18 @@ with tab_ml:
     clf_etapa = st.radio("Etapa para classificação", list(ETAPA_DETALHE.keys()), key="clf_etapa")
     target_col = rate_column("abandono", clf_etapa, "Total")
 
-    clf_df = df[
-        df["localizacao"].isin(["Urbana", "Rural"]) & df["dependencia"].isin(["Federal", "Estadual", "Municipal", "Privada"])
-    ].dropna(subset=[target_col]).copy()
+    resultado = train_classifier(target_col)
 
-    risco_codes, risco_bins = pd.qcut(clf_df[target_col], q=3, retbins=True, duplicates="drop", labels=False)
-    all_labels = ["Baixo", "Médio", "Alto"]
-    labels_disponiveis = all_labels[-(len(risco_bins) - 1):]
-    clf_df["risco"] = pd.Categorical.from_codes(risco_codes, categories=labels_disponiveis)
-
-    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
-    X_clf = encoder.fit_transform(clf_df[["localizacao", "dependencia"]])
-    y_clf = clf_df["risco"]
-
-    if y_clf.nunique() < 2 or len(clf_df) < 20:
+    if resultado is None:
         st.warning("Dados insuficientes para treinar o classificador com esses filtros.")
     else:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_clf, y_clf, test_size=0.25, random_state=42, stratify=y_clf
+        acc, labels, cm, importancias_pct = (
+            resultado["acc"], resultado["labels"], resultado["cm"], resultado["importancias_pct"]
         )
-        rf = RandomForestClassifier(n_estimators=300, random_state=42).fit(X_train, y_train)
-        y_pred = rf.predict(X_test)
-        acc = accuracy_score(y_test, y_pred)
 
         mc1, mc2 = st.columns([1, 1])
         with mc1:
             st.metric("Acurácia (conjunto de teste)", f"{acc:.0%}")
-            labels = sorted(y_clf.unique())
-            cm = confusion_matrix(y_test, y_pred, labels=labels)
             st.plotly_chart(
                 px.imshow(
                     cm, x=labels, y=labels, text_auto=True, color_continuous_scale="Blues",
@@ -391,8 +418,6 @@ with tab_ml:
                     f"o modelo acertou **{acertos}** ({acertos / total:.0%})."
                 )
         with mc2:
-            feature_names = [pretty_feature_name(n) for n in encoder.get_feature_names_out(["localizacao", "dependencia"])]
-            importancias_pct = pd.Series(rf.feature_importances_ * 100, index=feature_names).sort_values()
             st.plotly_chart(
                 px.bar(
                     importancias_pct, orientation="h", title="Peso de cada variável na decisão do modelo",
