@@ -3,3 +3,9 @@ __pycache__/
 .venv/
 venv/
 .streamlit/secrets.toml
+
+# Documentos da disciplina (relatorios, plano de ensino): nunca vao para o GitHub
+*.docx
+*.doc
+*.pdf
+~$*
