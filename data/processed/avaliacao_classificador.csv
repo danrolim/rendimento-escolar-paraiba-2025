@@ -1,0 +1,11 @@
+Etapa,Modelo,AUC,Acurácia balanceada,Recall,Precisão,Acurácia
+Fundamental,Linha de base (sempre 'não elevado'),0.5,0.5,0.0,0.0,0.762
+Fundamental,"Random Forest, só perfil, sem balanceamento",0.763,0.633,0.335,0.603,0.789
+Fundamental,"Random Forest, só perfil, balanceado",0.761,0.708,0.823,0.388,0.648
+Fundamental,"Regressão logística, perfil e posição, balanceada",0.788,0.717,0.738,0.433,0.706
+Fundamental,"Random Forest, perfil e posição, balanceado (usado no painel)",0.781,0.726,0.671,0.493,0.754
+Médio,Linha de base (sempre 'não elevado'),0.5,0.5,0.0,0.0,0.756
+Médio,"Random Forest, só perfil, sem balanceamento",0.6,0.5,0.0,0.0,0.756
+Médio,"Random Forest, só perfil, balanceado",0.6,0.625,0.987,0.302,0.44
+Médio,"Regressão logística, perfil e posição, balanceada",0.745,0.685,0.783,0.381,0.635
+Médio,"Random Forest, perfil e posição, balanceado (usado no painel)",0.77,0.718,0.736,0.451,0.708

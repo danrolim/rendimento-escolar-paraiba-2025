@@ -11,13 +11,11 @@ from pathlib import Path
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from classificador import avaliar, montar_base
 from sugestoes import MAX_CARACTERES, MAX_PALAVRAS, MAX_TITULO, contar_palavras, enviar, montar_dados
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, confusion_matrix
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "processed" / "tx_rend_pb_2025.csv"
 GEOJSON_PATH = Path(__file__).resolve().parent.parent / "data" / "raw" / "geojs-25-mun.json"
@@ -59,23 +57,12 @@ SUFFIX_PRETTY = {
     "medio_nao_seriado": "Médio Não Seriado",
 }
 
-CATEGORY_PRETTY = {"localizacao": "Localização", "dependencia": "Dependência"}
-
-
 def pretty_label(col: str) -> str:
     """Converte um nome de coluna de taxa (ex.: aprovacao_fund_total) em rótulo legível."""
     prefix, _, suffix = col.partition("_")
     if prefix in RATE_LABELS and suffix in SUFFIX_PRETTY:
         return f"{RATE_LABELS[prefix]} {SUFFIX_PRETTY[suffix]}"
     return col
-
-
-def pretty_feature_name(name: str) -> str:
-    """Converte nomes de features one-hot (ex.: localizacao_Rural) em rótulos legíveis."""
-    for code, label in CATEGORY_PRETTY.items():
-        if name.startswith(f"{code}_"):
-            return f"{label}: {name[len(code) + 1:]}"
-    return pretty_label(name)
 
 
 @st.cache_data
@@ -114,38 +101,11 @@ def run_clustering(k: int) -> pd.DataFrame:
 
 
 @st.cache_data
-def train_classifier(target_col: str) -> dict | None:
-    dados = load_data()
-    clf_df = dados[
-        dados["localizacao"].isin(["Urbana", "Rural"])
-        & dados["dependencia"].isin(["Federal", "Estadual", "Municipal", "Privada"])
-    ].dropna(subset=[target_col]).copy()
-
-    risco_codes, risco_bins = pd.qcut(clf_df[target_col], q=3, retbins=True, duplicates="drop", labels=False)
-    labels_disponiveis = ["Baixo", "Médio", "Alto"][-(len(risco_bins) - 1):]
-    clf_df["risco"] = pd.Categorical.from_codes(risco_codes, categories=labels_disponiveis)
-
-    encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
-    X_clf = encoder.fit_transform(clf_df[["localizacao", "dependencia"]])
-    y_clf = clf_df["risco"]
-
-    if y_clf.nunique() < 2 or len(clf_df) < 20:
-        return None
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_clf, y_clf, test_size=0.25, random_state=42, stratify=y_clf
-    )
-    rf = RandomForestClassifier(n_estimators=300, random_state=42).fit(X_train, y_train)
-    y_pred = rf.predict(X_test)
-
-    labels = sorted(y_clf.unique())
-    feature_names = [pretty_feature_name(n) for n in encoder.get_feature_names_out(["localizacao", "dependencia"])]
-    return {
-        "acc": accuracy_score(y_test, y_pred),
-        "labels": labels,
-        "cm": confusion_matrix(y_test, y_pred, labels=labels),
-        "importancias_pct": pd.Series(rf.feature_importances_ * 100, index=feature_names).sort_values(),
-    }
+def avaliar_classificador(target_col: str) -> dict:
+    base, corte = montar_base(load_data(), load_geojson(), target_col)
+    resultado = avaliar(base)
+    resultado["corte"] = corte
+    return resultado
 
 
 def chave_alfabetica(texto: str) -> str:
@@ -382,51 +342,72 @@ with tab_ml:
     st.header("Classificação de risco de abandono")
     st.markdown(
         "Este modelo aprende, a partir dos dados reais dos 223 municípios da Paraíba, se o "
-        "perfil escolar, ou seja, a localização (urbana ou rural) e a rede administrativa "
-        "(federal, estadual, municipal ou privada), já indica um risco maior ou menor de "
-        "abandono escolar."
+        "perfil escolar, ou seja, a localização (urbana ou rural), a rede administrativa "
+        "(federal, estadual, municipal ou privada) e a posição geográfica do município, já "
+        "indica risco elevado de abandono escolar."
     )
 
     clf_etapa = st.radio("Etapa para classificação", list(ETAPA_DETALHE.keys()), key="clf_etapa")
     target_col = rate_column("abandono", clf_etapa, "Total")
 
-    resultado = train_classifier(target_col)
+    res = avaliar_classificador(target_col)
+    media, cm = res["media"], res["matriz"]
+    st.markdown(
+        f"**Risco elevado** significa estar entre os 25% de perfis com maior abandono no {clf_etapa}, "
+        f"ou seja, acima de {res['corte']:.1f}%. Foram analisados {res['n_perfis']} perfis "
+        f"(combinações de município, zona e rede)."
+    )
 
-    if resultado is None:
-        st.warning("Dados insuficientes para treinar o classificador com esses filtros.")
-    else:
-        acc, labels, cm, importancias_pct = (
-            resultado["acc"], resultado["labels"], resultado["cm"], resultado["importancias_pct"]
+    m1, m2, m3 = st.columns(3)
+    m1.metric(
+        "Perfis de risco elevado identificados", f"{media['recall']:.0%}",
+        help="Entre os perfis que realmente tinham risco elevado, a parcela que o modelo apontou (recall).",
+    )
+    m2.metric(
+        "Alertas corretos", f"{media['precisao']:.0%}",
+        help="Entre os perfis que o modelo apontou como risco elevado, a parcela que realmente tinha (precisão).",
+    )
+    m3.metric(
+        "Capacidade de distinguir (AUC)", f"{media['auc']:.2f}",
+        help="0,50 equivale ao acaso e 1,00 seria perfeito.",
+    )
+    st.caption(
+        f"Para comparar: um modelo que respondesse sempre \"risco não elevado\" acertaria {1 - res['prevalencia']:.0%} "
+        "dos casos, mas não identificaria nenhum perfil de risco elevado. Por isso a acurácia não é a medida principal."
+    )
+
+    mc1, mc2 = st.columns([1, 1])
+    with mc1:
+        rotulos = ["Não elevado", "Elevado"]
+        st.plotly_chart(
+            px.imshow(
+                cm, x=rotulos, y=rotulos, text_auto=True, color_continuous_scale="Blues",
+                labels=dict(x="Previsto", y="Real", color="Contagem"),
+                title="Matriz de confusão",
+            ),
+            use_container_width=True,
         )
-
-        mc1, mc2 = st.columns([1, 1])
-        with mc1:
-            st.metric("Acurácia (conjunto de teste)", f"{acc:.0%}")
-            st.plotly_chart(
-                px.imshow(
-                    cm, x=labels, y=labels, text_auto=True, color_continuous_scale="Blues",
-                    labels=dict(x="Previsto", y="Real", color="Contagem"),
-                    title="Matriz de confusão",
-                ),
-                use_container_width=True,
-            )
-            for i, lbl in enumerate(labels):
-                total = cm[i].sum()
-                if total == 0:
-                    continue
-                acertos = cm[i, i]
-                st.markdown(
-                    f"- Dos **{total}** perfis escolares que realmente tiveram risco **{lbl}**, "
-                    f"o modelo acertou **{acertos}** ({acertos / total:.0%})."
-                )
-        with mc2:
-            st.plotly_chart(
-                px.bar(
-                    importancias_pct, orientation="h", title="Peso de cada variável na decisão do modelo",
-                    labels={"value": "Peso na decisão do modelo (%)", "index": ""},
-                ),
-                use_container_width=True,
-            )
+        reais_elevados = cm[1].sum()
+        apontados = cm[:, 1].sum()
+        st.markdown(
+            f"- Dos **{reais_elevados}** perfis que realmente tinham risco elevado, o modelo identificou "
+            f"**{cm[1, 1]}** ({cm[1, 1] / reais_elevados:.0%}).\n"
+            f"- Dos **{apontados}** perfis que o modelo apontou como risco elevado, **{cm[1, 1]}** "
+            f"({cm[1, 1] / apontados:.0%}) realmente tinham."
+        )
+    with mc2:
+        st.plotly_chart(
+            px.bar(
+                res["importancias_pct"], orientation="h", title="Peso de cada informação na decisão do modelo",
+                labels={"value": "Peso na decisão do modelo (%)", "index": ""},
+            ),
+            use_container_width=True,
+        )
+    st.caption(
+        "Avaliação por validação cruzada (5 partes, repetida 3 vezes), com os perfis de um mesmo município "
+        "sempre na mesma parte, para que o modelo nunca seja testado em um município que já viu. "
+        "Os três indicadores acima são a média das repetições; a matriz de confusão mostra uma delas."
+    )
 
 # -------------------------------------------------------------- Sugestões --
 INTERVALO_ENVIO_S = 60

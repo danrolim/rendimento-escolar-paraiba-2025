@@ -14,8 +14,10 @@ data/
   processed/    # dados limpos, filtrados para a PB
 src/
   data/prepare.py   # limpeza e filtragem dos dados brutos
+  ml/avaliar_classificador.py   # compara alternativas do classificador (--ajuste testa hiperparâmetros)
 app/
   dashboard.py      # aplicação Streamlit
+  classificador.py  # classificador de risco elevado de abandono
 notebooks/          # análise exploratória
 ```
 
@@ -36,8 +38,10 @@ streamlit run app/dashboard.py
 - Tabela detalhada com exportação em CSV.
 - Aba de Machine Learning:
   - **Clusterização (K-Means)** — segmenta os municípios por perfil de rendimento escolar.
-  - **Classificação (Random Forest)** — prevê o nível de risco de abandono a partir da
-    localização, dependência administrativa e taxas de aprovação/reprovação.
+  - **Classificação (Random Forest)** — indica se um perfil escolar (município, zona e rede)
+    tem risco elevado de abandono, definido como estar entre os 25% de maiores taxas. Usa zona,
+    dependência administrativa e posição geográfica do município, com classes balanceadas, e é
+    avaliada por validação cruzada agrupada por município (recall, precisão e AUC).
 
 ## Envio de sugestões
 
